@@ -1,0 +1,160 @@
+<?php
+
+/**
+ * @file
+ * Contains social_virtual_event_bbb_enrollment.module.
+ */
+
+use Drupal\Core\Form\FormStateInterface;
+use Drupal\Core\Field\FormatterInterface;
+use Drupal\Core\Field\FieldDefinitionInterface;
+use Drupal\Core\Entity\Entity\EntityViewDisplay;
+use Drupal\Core\Routing\TrustedRedirectResponse;
+use Drupal\virtual_event_bbb\VirtualEventBBB;
+use BigBlueButton\Parameters\JoinMeetingParameters;
+
+
+/**
+ * Implements hook_form_alter()
+ */
+function social_virtual_event_bbb_enrollment_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+  
+  if ($form_id === 'virtual_event_bbb_link_form') {
+
+    $token = \Drupal::request()->query->get('token');
+  
+    $user = \Drupal::currentUser();
+    $args = $form_state->getBuildInfo()["args"];
+    $event = $args[0];
+    $display_options = $args[1];
+
+    $uid = $user->id();
+    $nid = $event->getEntity()->id();
+    $node_type = $event->getEntity()->getType();
+    
+
+    // Make sure we act on event nodes only
+    // Make sure Event organizers are not effected
+    if (isset($node_type) && $node_type === 'event' && !social_event_manager_or_organizer()) {
+
+      if (!$user->isAnonymous()) {
+
+        $storage = \Drupal::entityTypeManager()->getStorage('event_enrollment');
+
+        // Check if user has enrolled the event
+        $enrolled = $storage->loadByProperties([
+          'field_account' => $uid,
+          'field_event' => $nid,
+          'field_enrollment_status' => 1,
+        ]);
+
+        // Don't show the join meeting button
+        if (!$enrolled) {
+          unset($form['submit']);
+        }
+
+      } 
+      else {   
+        /** @var \Drupal\social_event_an_enroll\EventAnEnrollManager $service */
+        $an_enrolled = \Drupal::service('social_event_an_enroll.service')->tokenExists($token, $nid);  
+        if (!$an_enrolled) {
+          unset($form['submit']);
+        } 
+      }
+    } 
+
+    // We need our custom submit handler for events only
+    if (isset($node_type) && $node_type === 'event') { 
+      // Define custom submit handler for enrollment service
+      $form['#submit'] = ['social_virtual_event_bbb_enrollment_submit_handler'];
+    }
+    
+  }
+}
+
+/**
+ * Custom form submit handler for joining bbb meeting.
+ *
+ * @param array $form
+ *   The form array.
+ * @param \Drupal\Core\Form\FormStateInterface $form_state
+ *   Form state.
+ *
+ * @throws \Drupal\Core\Entity\EntityStorageException
+ */
+function social_virtual_event_bbb_enrollment_submit_handler(array $form, FormStateInterface $form_state) {
+
+  $BBBKeyPluginManager = \Drupal::service('plugin.manager.bbbkey_plugin');
+  $virtualEventsCommon = \Drupal::service('virtual_events.common');
+  $user = \Drupal::currentUser();
+  $event = $virtualEventsCommon->getEventById($form_state->getValue('event_id'));
+
+  if ($event) {
+    /* Check if meeting is not active,
+    recreate it before showing the join url */
+    $event = $event->reCreate();
+
+    $entity = $event->getEntity();
+    $enabled_event_source = $event->getEnabledSourceKey();
+    $event_config = $event->getVirtualEventsConfig($enabled_event_source);
+    $source_config = $event_config->getSourceConfig($enabled_event_source);
+    $source_data = $event->getSourceData();
+    $eventSourcePlugin = $event->getEventSourcePlugin();
+    if(!isset($source_config["data"]["key_type"])){
+      drupal_set_message(t("Couldn't create meeting! please contact system administrator."), 'error');
+    }
+
+    $keyPlugin = $BBBKeyPluginManager->createInstance($source_config["data"]["key_type"]);
+    $keys = $keyPlugin->getKeys($source_config);
+
+    $apiUrl = $keys["url"];
+    $secretKey = $keys["secretKey"];
+    $bbb = new VirtualEventBBB($secretKey, $apiUrl);
+
+    /* Check access for current entity, if user can update
+    then we can consider the user as moderator,
+    otherwise we consider the user as normal attendee.
+     */
+    if ($entity->access('update')) {
+      $joinMeetingParams = new JoinMeetingParameters($event->id(), $user->getDisplayName(), $source_data["settings"]["moderatorPW"]);
+    }
+    elseif ($entity->access('view')) {
+      if ($user->isAnonymous()) {
+        $joinMeetingParams = new JoinMeetingParameters($event->id(), 'Guest', $source_data["settings"]["attendeePW"]);
+      }
+      else {
+        $joinMeetingParams = new JoinMeetingParameters($event->id(), $user->getDisplayName(), $source_data["settings"]["attendeePW"]);
+      }
+    }
+    \Drupal::logger('virtual_event_bbb')->notice('<pre><code>' . print_r($joinMeetingParams, TRUE) . '</code></pre>' );
+    try {
+      $joinMeetingParams->setRedirect(TRUE);
+
+      $url = $bbb->getJoinMeetingURL($joinMeetingParams);
+
+      $form_state->setResponse(new TrustedRedirectResponse($url));
+
+    } catch (\RuntimeException $exception) {
+      watchdog_exception('virtual_event_bbb', $exception, $exception->getMessage());
+      drupal_set_message(t("Couldn't get meeting join link! please contact system administrator."), 'error');
+    } catch (Exception $exception) {
+      watchdog_exception('virtual_event_bbb', $exception, $exception->getMessage());
+      drupal_set_message(t("Couldn't get meeting join link! please contact system administrator."), 'error');
+    }
+  }
+  else {
+    drupal_set_message(t("Couldn't find meeting! please contact system administrator."), 'error');
+  }
+
+}
+
+/**
+ * Implements hook_virtual_events_virtual_event_formatter_plugin_info_alter()
+ * As defined in the PluginManager 
+ */
+function social_virtual_event_bbb_enrollment_virtual_events_virtual_event_formatter_plugin_info_alter(array &$info) {
+  // Time to get schwifty in here
+  if (isset($info['virtual_event_bbb_meeting'])) {
+    $info['virtual_event_bbb_meeting']['class'] = '\Drupal\social_virtual_event_bbb_enrollment\Plugin\VirtualEvent\FormatterPlugin\VirtualEventBBBEnrolledFormatter';
+  }
+}

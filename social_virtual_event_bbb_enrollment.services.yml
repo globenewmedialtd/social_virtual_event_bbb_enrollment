@@ -1,0 +1,5 @@
+services:
+  social_virtual_event_bbb_enrollment.route_subscriber:
+    class: Drupal\social_virtual_event_bbb_enrollment\Routing\RouteSubscriber
+    tags:
+      - { name: event_subscriber }

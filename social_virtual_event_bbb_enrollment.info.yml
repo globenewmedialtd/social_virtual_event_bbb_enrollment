@@ -1,0 +1,8 @@
+name: 'Social Virtual Event BBB Enrollment'
+type: module
+description: 'Adds Link to virtual event bbb for enrolled events only'
+core: 8.x
+package: 'Social'
+dependencies:
+  - virtual_event_bbb
+  - social:social_event_an_enroll
