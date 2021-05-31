@@ -37,6 +37,19 @@ function social_virtual_event_bbb_enrollment_form_alter(&$form, FormStateInterfa
     // Make sure Event organizers are not effected
     if (isset($node_type) && $node_type === 'event' && !social_event_manager_or_organizer()) {
 
+      if (isset($token)) {
+        $token_value = $token;
+      }
+      else {
+        $token_value = '';
+      }
+
+      // Add a hidden field for the token
+      $form['token_value'] = [
+        '#type' => 'hidden',
+        '#value' => $token_value
+      ];
+
       if (!$user->isAnonymous()) {
 
         $storage = \Drupal::entityTypeManager()->getStorage('event_enrollment');
@@ -57,6 +70,8 @@ function social_virtual_event_bbb_enrollment_form_alter(&$form, FormStateInterfa
       else {   
         /** @var \Drupal\social_event_an_enroll\EventAnEnrollManager $service */
         $an_enrolled = \Drupal::service('social_event_an_enroll.service')->tokenExists($token, $nid);  
+       
+        
         if (!$an_enrolled) {
           unset($form['submit']);
         } 
@@ -88,6 +103,12 @@ function social_virtual_event_bbb_enrollment_submit_handler(array $form, FormSta
   $virtualEventsCommon = \Drupal::service('virtual_events.common');
   $user = \Drupal::currentUser();
   $event = $virtualEventsCommon->getEventById($form_state->getValue('event_id'));
+  $token_value = $form_state->getValue('token_value');
+
+  // We need to read the token for an. users
+  //$token = \Drupal::request()->query->get('token');
+  
+  
 
   if ($event) {
     /* Check if meeting is not active,
@@ -120,13 +141,20 @@ function social_virtual_event_bbb_enrollment_submit_handler(array $form, FormSta
     }
     elseif ($entity->access('view')) {
       if ($user->isAnonymous()) {
-        $joinMeetingParams = new JoinMeetingParameters($event->id(), 'Guest', $source_data["settings"]["attendeePW"]);
+        // Get Display name for anonymous users
+        $display_name = social_virtual_event_bbb_enrollment_get_name_for_unauthenticated_users($token_value, $entity->id());
+        if ($display_name) {
+          $joinMeetingParams = new JoinMeetingParameters($event->id(), $display_name, $source_data["settings"]["attendeePW"]);
+        }
+        else {
+          $joinMeetingParams = new JoinMeetingParameters($event->id(), 'Guest', $source_data["settings"]["attendeePW"]);
+        }        
       }
       else {
         $joinMeetingParams = new JoinMeetingParameters($event->id(), $user->getDisplayName(), $source_data["settings"]["attendeePW"]);
       }
     }
-    \Drupal::logger('virtual_event_bbb')->notice('<pre><code>' . print_r($joinMeetingParams, TRUE) . '</code></pre>' );
+    
     try {
       $joinMeetingParams->setRedirect(TRUE);
 
@@ -157,4 +185,60 @@ function social_virtual_event_bbb_enrollment_virtual_events_virtual_event_format
   if (isset($info['virtual_event_bbb_meeting'])) {
     $info['virtual_event_bbb_meeting']['class'] = '\Drupal\social_virtual_event_bbb_enrollment\Plugin\VirtualEvent\FormatterPlugin\VirtualEventBBBEnrolledFormatter';
   }
+}
+
+/**
+ * Helper to get display name for
+ * annonymous users 
+ */
+function social_virtual_event_bbb_enrollment_get_name_for_unauthenticated_users($token, $nid) {
+
+  $display_name = [];
+  $an_enrolled = \Drupal::service('social_event_an_enroll.service')->tokenExists($token, $nid);
+  
+  // Check if we have an anonymous account
+  if ($an_enrolled) {
+    $storage = \Drupal::entityTypeManager()->getStorage('event_enrollment');
+    // Check if user has enrolled the event
+    $enrolled = $storage->loadByProperties([
+      'field_token' => $token,
+      'field_event' => $nid,
+      'field_enrollment_status' => 1,
+    ]);
+
+    if ($user_enrolled = array_pop($enrolled)) {
+
+      if (isset($user_enrolled->field_first_name)) {
+        if (!empty($user_enrolled->field_first_name->value)) {
+          $display_name['first_name'] = $user_enrolled->field_first_name->value;
+        }
+      }
+      if (isset($user_enrolled->field_last_name)) {
+        if (!empty($user_enrolled->field_last_name->value)) {
+          $display_name['last_name'] = $user_enrolled->field_last_name->value;
+        }
+      }
+
+      // In case we have first and last name
+      if (isset($display_name['first_name']) && isset($display_name['last_name'])) {
+        return $display_name['first_name'] . ' ' . $display_name['last_name'];
+      }
+      // only first name given
+      elseif (isset($display_name['first_name']) && !isset($display_name['last_name'])) {
+        return $display_name['first_name'];
+      }
+      // only last name given
+      elseif (!isset($display_name['first_name']) && isset($display_name['last_name'])) {
+        return $display_name['last_name'];
+      }
+      else {
+        return FALSE;
+      }
+
+    }
+    
+  }
+  
+  return FALSE;
+
 }
