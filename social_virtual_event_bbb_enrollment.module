@@ -18,6 +18,15 @@ use BigBlueButton\Parameters\JoinMeetingParameters;
  * Implements hook_form_alter()
  */
 function social_virtual_event_bbb_enrollment_form_alter(&$form, FormStateInterface $form_state, $form_id) {
+
+
+
+  // We want required fields for enroll dialog
+  if ($form_id === 'event_an_enroll_form') {
+    // Make First and Last name required
+    $form['field_first_name']['#required'] = TRUE;
+    $form['field_last_name']['#required'] = TRUE;
+  }
   
   if ($form_id === 'virtual_event_bbb_link_form') {
 
